@@ -193,9 +193,6 @@ __4. Polish & UX:__
 
 ## __Implementation Strategy:__
 
-__Ngày 1-2:__ SprEditor drag & drop folder __Ngày 3-4:__ SprEditor GIF support\
-__Ngày 5-6:__ SprEditor animation editor __Ngày 7-8:__ MapEditor TitleSet system __Ngày 9-10:__ MapEditor region editor __Ngày 11-12:__ Layer management & sprite assignment __Ngày 13-14:__ Advanced features & polish
-
 ## __Công nghệ sử dụng:__
 
 - __ImGui:__ UI framework (đã có)
