@@ -78,8 +78,9 @@ cmake ..
 make
 (Có thể dùng toolchain VS2022 + VSCode để build)
 
+---
 
-### Resource Pipeline
+## Resource Pipeline
 Assets (images, data)
         ↓
    Tools (SPR / MAP / PAK)
@@ -122,6 +123,9 @@ Tách SEngine thành repo riêng (submodule)
 CI/CD build tự động
 Binary resource format + compression
 Streaming world (load/unload region theo camera)
-### License
+
+---
+
+## License
 Author
 Pham Van Binh Minh
