@@ -1,131 +1,148 @@
-# TSR Workspace
+🎮 Overview
+TSR Workspace là một mono-repo tích hợp:
 
-TSR Workspace là mono-repo chứa toàn bộ hệ thống phát triển game, bao gồm:
+Component	Mục đích
+DaiGiangVoTan	Game client logic
+SEngine	Core engine (rendering, ECS, resources)
+Tools	Asset editors & pipeline tools
+Pipeline: Assets → Tools → .pak files → Game Runtime
 
-- Game client  
-- Game engine  
-- Tool chỉnh sửa resource  
-
-Mục tiêu là cung cấp một pipeline hoàn chỉnh từ tạo asset → build → runtime.
-
----
-
-## Project Structure
+📂 Project Structure
+Copy
 TSR-Workspace/
-├── DaiGiangVoTan/ # Game client
-├── SEngine/ # Core engine (rendering, ECS, resource...)
-├── Tools/ # Toolchain (editor, packer, etc)
-├── CMakeLists.txt # Root build config
+├── DaiGiangVoTan/          # Game Client
+│   ├── src/
+│   ├── assets/
+│   └── CMakeLists.txt
+├── SEngine/                # Core Engine
+│   ├── src/
+│   ├── include/
+│   └── CMakeLists.txt
+├── Tools/                  # Development Tools
+│   ├── MapEditor/
+│   ├── SPREditor/
+│   ├── PAKEditor/
+│   └── CMakeLists.txt
+├── CMakeLists.txt          # Root config
+├── README.md
 └── .gitignore
+🔧 Components
+DaiGiangVoTan (Game Client)
+Gameplay logic & mechanics
+Loads .pak resource bundles
+Renders maps, entities, animations
+Built on SEngine
+SEngine (Engine)
+Rendering: OpenGL backend
+ECS: Entity Component System
+Resources: Asset management & streaming
+Animation: Sprite & sequence playback
+Maps: Region-based grid system
+Input: GLFW input handling
+Tools (Pipeline)
+Map Editor: Design level layouts
+SPR Editor: Create sprites & animations
+PAK Editor: Bundle & compress resources
+🚀 Build
+Requirements
+Copy
+C++17, CMake 3.16+, OpenGL 4.1+
+GLFW, ImGui
+Build Steps
+bash
+Copy
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)    # Linux/macOS
+# or: cmake --build . --config Release  (Windows)
+IDE Support
+VS2022 + CMake
+VSCode + CMake Tools extension
+CLion
+📊 Resource Pipeline
+Copy
+Raw Assets (PNG, JSON, etc)
+    ↓
+Editors (MapEditor, SPREditor)
+    ↓
+Processed Data
+    ↓
+PAK Packer
+    ↓
+.pak Files (Binary)
+    ↓
+Game Runtime (load via ResourceManager)
+🗺️ Map System
+Region-Based Architecture:
 
+Copy
+World = Grid of Regions
+Each Region = Fixed Size (UnitSize × UnitSize)
 
----
+Separation:
+├── region_S (Server)
+│   ├── Collision data
+│   └── Logic/gameplay
+└── region_C (Client)
+    ├── Sprites & textures
+    └── Render assets
+Benefits:
 
-## Components
-
-### DaiGiangVoTan (Game Client)
-
-- Chứa logic game  
-- Sử dụng SEngine làm nền tảng  
-- Load resource từ `.pak`  
-- Render map, entity, animation  
-
----
-
-### SEngine (Engine)
-
-Core engine chịu trách nhiệm:
-
-- Rendering (OpenGL)  
-- Resource management  
-- ECS (Entity Component System)  
-- Animation system  
-- Map & region streaming  
-- Input handling  
-
----
-
-### Tools
-
-Các tool hỗ trợ development:
-
-- Map Editor  
-- SPR Editor (sprite/animation)  
-- PAK Editor (đóng gói resource)  
-
-Dùng để tạo dữ liệu cho game runtime.
-
----
-
-## Build
-
-### Requirements
-
-- C++17  
-- CMake  
-- OpenGL  
-- GLFW  
-- ImGui  
-
----
-
-### Build Steps
-
-```bash
-mkdir build
-cd build
-cmake ..
-make
-(Có thể dùng toolchain VS2022 + VSCode để build)
-
----
-
-## Resource Pipeline
-Assets (images, data)
-        ↓
-   Tools (SPR / MAP / PAK)
-        ↓
-     .pak files
-        ↓
-   Game Client (runtime load)
-
-
-### Map System
-Map được chia thành grid region
-Mỗi region có kích thước cố định (UnitSize x UnitSize)
-Server và Client sử dụng dữ liệu riêng:
-region_S: logic, collision
-region_C: render, asset
-Development Notes
-Kiến trúc tách biệt:
-Engine (SEngine)
-Game (DaiGiangVoTan)
-### Tools
-Dễ mở rộng:
-thêm system mới vào engine
-thêm format resource
-Hỗ trợ phát triển game 2D theo hướng data-driven
-Roadmap
+Efficient streaming (load/unload by camera)
+Separation of concerns
+Scalable for large worlds
+🏗️ Architecture Highlights
+Modular Design
+SEngine = Reusable core
+DaiGiangVoTan = Game-specific layer
+Tools = Development pipeline
+Data-Driven
+ECS for flexible entity behavior
+Configuration files for gameplay
+Hot-reloadable assets
+Extensible
+Add new ECS systems easily
+Support multiple resource formats
+Custom tool integration
+📋 Roadmap
 Engine
-ECS hoàn chỉnh
-Resource streaming theo region
-Animation system tối ưu
+ Complete ECS implementation
+ Region streaming optimization
+ Advanced animation blending
 Tools
-Drag & drop asset
-Undo / Redo
-Resource browser
+ Drag & drop asset placement
+ Undo/Redo system
+ Integrated resource browser
 Game
-Gameplay systems
-AI / NPC
-UI
-Future Improvements
-Tách SEngine thành repo riêng (submodule)
-CI/CD build tự động
+ Gameplay systems (combat, movement)
+ AI & NPC behavior
+ UI framework
+🔮 Future Improvements
+Modularization
+
+Extract SEngine to separate repo (git submodule)
+Reuse across multiple game projects
+CI/CD
+
+Automated builds on commit
+Unit tests framework
+Asset validation pipeline
+Performance
+
 Binary resource format + compression
-Streaming world (load/unload region theo camera)
+Incremental streaming
+Memory pooling
+Developer Experience
 
----
+Build scripts (shell/batch)
+Hot-reload during development
+Debug visualization tools
+📝 Development Notes
+Language: C++17
+Rendering: OpenGL + GLFW
+UI: ImGui (for tools)
+Architecture: ECS + Component-based
+Target: 2D Game (tile-based or sprite-based)
 
-## License
-Author
+👤 Author
 Pham Van Binh Minh
