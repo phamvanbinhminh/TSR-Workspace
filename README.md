@@ -1,62 +1,85 @@
-TSR Workspace
+# TSR Workspace
 
 TSR Workspace là mono-repo chứa toàn bộ hệ thống phát triển game, bao gồm:
 
-Game client
-Game engine
-Tool chỉnh sửa resource
+- Game client  
+- Game engine  
+- Tool chỉnh sửa resource  
 
 Mục tiêu là cung cấp một pipeline hoàn chỉnh từ tạo asset → build → runtime.
 
-Project Structure
+---
+
+## Project Structure
 TSR-Workspace/
-├── DaiGiangVoTan/   # Game client
-├── SEngine/         # Core engine (rendering, ECS, resource...)
-├── Tools/           # Toolchain (editor, packer, etc)
-├── CMakeLists.txt   # Root build config
+├── DaiGiangVoTan/ # Game client
+├── SEngine/ # Core engine (rendering, ECS, resource...)
+├── Tools/ # Toolchain (editor, packer, etc)
+├── CMakeLists.txt # Root build config
 └── .gitignore
-Components
-DaiGiangVoTan (Game Client)
-Chứa logic game
-Sử dụng SEngine làm nền tảng
-Load resource từ .pak
-Render map, entity, animation
-SEngine (Engine)
+
+
+---
+
+## Components
+
+### DaiGiangVoTan (Game Client)
+
+- Chứa logic game  
+- Sử dụng SEngine làm nền tảng  
+- Load resource từ `.pak`  
+- Render map, entity, animation  
+
+---
+
+### SEngine (Engine)
 
 Core engine chịu trách nhiệm:
 
-Rendering (OpenGL)
-Resource management
-ECS (Entity Component System)
-Animation system
-Map & region streaming
-Input handling
-Tools
+- Rendering (OpenGL)  
+- Resource management  
+- ECS (Entity Component System)  
+- Animation system  
+- Map & region streaming  
+- Input handling  
+
+---
+
+### Tools
 
 Các tool hỗ trợ development:
 
-Map Editor
-SPR Editor (sprite/animation)
-PAK Editor (đóng gói resource)
+- Map Editor  
+- SPR Editor (sprite/animation)  
+- PAK Editor (đóng gói resource)  
 
 Dùng để tạo dữ liệu cho game runtime.
 
-Build
-Requirements
-C++17
-CMake
-OpenGL
-GLFW
-ImGui
+---
 
-Build Steps
+## Build
+
+### Requirements
+
+- C++17  
+- CMake  
+- OpenGL  
+- GLFW  
+- ImGui  
+
+---
+
+### Build Steps
+
+```bash
 mkdir build
 cd build
 cmake ..
 make
-(có thể dùng tool chain vss2022 để build và dùng vscode có cài plugin phát triển cho nhẹ nhàng)
+(Có thể dùng toolchain VS2022 + VSCode để build)
 
-Resource Pipeline
+
+### Resource Pipeline
 Assets (images, data)
         ↓
    Tools (SPR / MAP / PAK)
@@ -64,7 +87,9 @@ Assets (images, data)
      .pak files
         ↓
    Game Client (runtime load)
-Map System
+
+
+### Map System
 Map được chia thành grid region
 Mỗi region có kích thước cố định (UnitSize x UnitSize)
 Server và Client sử dụng dữ liệu riêng:
@@ -74,7 +99,7 @@ Development Notes
 Kiến trúc tách biệt:
 Engine (SEngine)
 Game (DaiGiangVoTan)
-Tools
+### Tools
 Dễ mở rộng:
 thêm system mới vào engine
 thêm format resource
@@ -97,10 +122,6 @@ Tách SEngine thành repo riêng (submodule)
 CI/CD build tự động
 Binary resource format + compression
 Streaming world (load/unload region theo camera)
-License
-
-Private project.
-
+### License
 Author
-
 Pham Van Binh Minh
