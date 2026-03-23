@@ -1,44 +1,70 @@
-!cấu trúc file .map(plain text)
+Map File Structure
+.map (plain text)
 [MAIN]
-type=S/C <- Server/Client
-w=<chiều w>
-h=<chiều h>
-UnitSize=<kích thước mỗi vùng AxA>
-!vẽ từng x/region_S_y(C) đến w,region_S_h(C)  
+type=S/C        ; S = Server, C = Client
+w=<width>       ; số region theo trục X
+h=<height>      ; số region theo trục Y
+UnitSize=<A>    ; kích thước mỗi region (A x A)
+Ghi chú
+Map được chia thành lưới các region
+Mỗi region có kích thước UnitSize x UnitSize
+Tên region theo dạng:
+region_<type>_<x>_<y>
+Region System
+Cả Server và Client đều dùng hệ thống region
+Mỗi region là một ô trong grid
+Toạ độ trong region là local, không phải global map
+Server Region Data
+region_S_<x>_<y>.dat
+char[] REGION_DATA_S
 
+[Obstacle Table]
+Obstacle Table
+Danh sách vật cản
+Mỗi vật cản là một polygon (danh sách đỉnh)
+Toạ độ là local trong region
+Client Region Data
+region_C_<x>_<y>.dat
+char[] REGION_DATA_C
+int layerCount
 
-!cấu trúc region
-/*
-cả Server và Client cũng theo từng vùng UnitSizexUnitSize(mỗi region là UnitSizexUnitSize)
-!cấu trúc region_S_y.dat
-/*
-char[]; REGION_DATA_S
 [Obstacle Table]
-!ví dụ Obstacle Table
-danh sách đỉnh của vật cản <- thông tin vật cản (với mỗi x,y là toạ độ của vật cản tính từ hệ quy chiếu của region không tính từ gốc toạ độ của cả map)
-//
-!cấu trúc region_C_y.dat
-/*
-char[]; REGION_DATA_C
-int layerCount;
-[Obstacle Table]
-!ví dụ Obstacle Table
-danh sách đỉnh của vật cản <- thông tin vật cản (với mỗi x,y là toạ độ của vật cản tính từ hệ quy chiếu của region không tính từ gốc toạ độ của cả map)
 
 [String Table layer0]
 [String Table layer1]
 [String Table layer2]
 ...
+Obstacle Table
+Giống server
+Dùng cho va chạm hoặc debug nếu cần
+String Table
 
-!vẽ theo thứ tự các string table
-!String Table là Danh sách tên file:
-thư mục chứa spr(nếu có)/<tên file>.spr <- đã có cách draw ở ReadMeSpr.md
-//
-//
+Mỗi layer là danh sách resource .spr:
 
-!cấu trúc folder map
-/<tên map>
-	<tên map>.png <- minimap toàn cục
-	<tên map>.map <- settings map
-	/Region
-		các thư mục con dạng x có các file region_S_y.dat hoặc region_C_y.dat tuỳ vào bản nào
+<folder>/<file>.spr
+Ví dụ
+tiles/grass.spr
+objects/tree.spr
+Render
+Vẽ theo thứ tự:
+layer0 → layer1 → layer2 → ...
+Cách render .spr xem ReadMeSpr.md
+Folder Structure
+/<map_name>
+    <map_name>.png        ; minimap
+    <map_name>.map        ; config
+
+    /Region
+        /0
+            region_S_0_0.dat
+            region_C_0_0.dat
+            region_S_0_1.dat
+        /1
+            region_S_1_0.dat
+            region_C_1_0.dat
+Summary
+Map chia thành grid region
+Server dùng region_S (logic, collision)
+Client dùng region_C (render, asset)
+Asset client là .spr
+Toạ độ trong region là local
