@@ -3,6 +3,7 @@
 #include "../MapEdit/MapEditor.h"
 #include "../PakEdit/PakEditor.h"
 #include "../SprEdit/SprEditor.h"
+#include "AppConfig.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -19,6 +20,13 @@ public:
 
     ~MyApp()
     {
+        // ── Lưu config trước khi tắt ──────────────────────────
+        _mapEditor.SaveToConfig();
+        AppConfig::Get().showMapEditor = _showMapEditor;
+        AppConfig::Get().showSprEditor = _showSprEditor;
+        AppConfig::Get().showPakEditor = _showPakEditor;
+        AppConfig::Get().Save();
+
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
@@ -35,6 +43,18 @@ public:
 
         ImGui_ImplGlfw_InitForOpenGL(window, true);
         ImGui_ImplOpenGL3_Init("#version 130");
+
+        // ── Load config ngay sau khi ImGui khởi động xong ─────
+        AppConfig& cfg = AppConfig::Get();
+        cfg.Load();
+
+        // Restore window-visibility state
+        _showMapEditor = cfg.showMapEditor;
+        _showSprEditor = cfg.showSprEditor;
+        _showPakEditor = cfg.showPakEditor;
+
+        // Restore MapEditor state + auto-load last map
+        _mapEditor.LoadFromConfig();
     }
 
     void Update(float dt) override
@@ -71,6 +91,12 @@ private:
 
                 if (ImGui::MenuItem("Exit"))
                 {
+                    // Lưu config trước khi exit
+                    _mapEditor.SaveToConfig();
+                    AppConfig::Get().showMapEditor = _showMapEditor;
+                    AppConfig::Get().showSprEditor = _showSprEditor;
+                    AppConfig::Get().showPakEditor = _showPakEditor;
+                    AppConfig::Get().Save();
                     exit(0);
                 }
 

@@ -57,6 +57,20 @@ public:
     int  GetFrameWidth()  const;
     int  GetFrameHeight() const;
 
+    // Hitbox của frame hiện tại (từ SprFrameMeta)
+    // Trả về true nếu hitbox hợp lệ (w > 0 && h > 0)
+    bool GetHitbox(int& outX, int& outY, int& outW, int& outH) const
+    {
+        if (!_loaded || _currentFrame < 0 ||
+            _currentFrame >= (int)_sprData.frames.size()) return false;
+        const SprFrameMeta& meta = _sprData.frames[_currentFrame].metadata;
+        outX = meta.hitboxX;
+        outY = meta.hitboxY;
+        outW = meta.hitboxWidth;
+        outH = meta.hitboxHeight;
+        return (outW > 0 && outH > 0);
+    }
+
 private:
     void UploadTextures();
     int  FindAnimation(const std::string& name) const;

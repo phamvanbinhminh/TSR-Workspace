@@ -41,8 +41,10 @@ public:
 
     bool IsConnected() const { return _connected.load(); }
 
-    // Gửi vị trí + animation state đến server (gọi từ game thread)
-    void SendMove(float x, float y, uint8_t animState = ANIM_IDLE);
+    // Gửi vị trí + animation state + hitbox đến server (gọi từ game thread)
+    void SendMove(float x, float y, uint8_t animState = ANIM_IDLE,
+                  int16_t hitboxX = 0, int16_t hitboxY = 0,
+                  int16_t hitboxW = 16, int16_t hitboxH = 24);
 
     // Lấy playerID của mình (do server cấp)
     uint32_t GetMyPlayerID() const { return _myPlayerID; }

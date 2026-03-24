@@ -95,6 +95,12 @@ public:
     void DrawRect(float x, float y, float w, float h,
                   float r, float g, float b, float a = 1.0f);
 
+    // Vẽ hình chữ nhật với outline + đường chéo //// bên trong (debug overlay)
+    // spacing: khoảng cách giữa các đường chéo (pixels)
+    void DrawHatchRect(float x, float y, float w, float h,
+                       float r, float g, float b, float a = 0.6f,
+                       float spacing = 8.f);
+
 #undef DrawText
     void DrawText(
         const std::string& text,

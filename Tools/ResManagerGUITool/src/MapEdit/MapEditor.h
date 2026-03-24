@@ -3,6 +3,9 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include <thread>
+#include <atomic>
+#include <mutex>
 #include <imgui.h>
 
 class Map;
@@ -44,6 +47,10 @@ struct PlacedTile
     int   fps         = 30;
 
     bool loaded = false;
+
+    // ── background loading state ──────────────────────────────
+    // 0 = unloaded, 1 = queued/loading (bg thread), 2 = pending GL upload, 3 = loaded
+    int  loadState = 0;
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -157,6 +164,10 @@ public:
     bool HasUnsavedChanges() const { return _unsavedChanges; }
     const std::string& GetCurrentMapPath() const { return _currentMapPath; }
 
+    // ── AppConfig integration ────────────────────────────────
+    void LoadFromConfig();   // restore state từ AppConfig::Get()
+    void SaveToConfig();     // ghi state vào AppConfig::Get() (chưa save file)
+
 private:
     // ── Sub-panels ──────────────────────────────────────────
     void RenderMenuBar();
@@ -176,8 +187,15 @@ private:
     void TickPreviews(float dt);
 
     // tile preview helpers
-    void LoadTilePreview(PlacedTile& tile);
+    // QueueTileLoad: đẩy tile vào worker thread để đọc pixel (không block GUI)
+    void QueueTileLoad(PlacedTile& tile);
     void FreeTilePreview(PlacedTile& tile);
+    // PollPendingUploads: gọi mỗi frame từ GUI thread để upload GL texture
+    void PollPendingUploads();
+    // (legacy sync load — vẫn dùng khi PlaceTileAt từ brush)
+    void LoadTilePreview(PlacedTile& tile);
+    // Kiểm tra tile có nằm trong viewport không (dùng cho culling)
+    bool IsVisible(const PlacedTile& tile) const;
 
     // tileset helpers
     void TickTilesetAnimations(float dt);
@@ -230,6 +248,11 @@ private:
     bool _dlgSaveAs  = false;
     bool _dlgAddTilesetFolder = false;
     char _dlgBuf[512]{};
+    // ── Load Map dialog: dual-path (S + C) ───────────────────
+    bool _dlgLoadS = true;   // checkbox: load version S
+    bool _dlgLoadC = false;  // checkbox: load version C
+    char _dlgBufS[512]{};    // path cho version S
+    char _dlgBufC[512]{};    // path cho version C
     char _newMapFolder[512]{};
     char _newMapName[256]{};
     int  _newMapW    = 2048;
@@ -255,4 +278,69 @@ private:
     bool _showGrid       = true;
     bool _showObstacles  = true;
     bool _showTiles      = true;
+
+    // ── Tile async load queue ─────────────────────────────────
+    // Pixel data decode xảy ra trên worker threads (thread pool)
+    // GL upload xảy ra trên GUI thread (PollPendingUploads)
+
+    // Kết quả từ worker thread sau khi decode xong SPR
+    struct PendingUpload {
+        PlacedTile* tile = nullptr;
+        struct FrameData {
+            std::vector<uint8_t> pixels;
+            int w = 0, h = 0;
+        };
+        std::vector<FrameData> frames;
+        int  pivotX  = 0, pivotY = 0;
+        int  fps     = 30;
+        bool useAnim = false;
+        bool success = false;
+    };
+
+    // Task được đưa vào cho worker thread xử lý
+    struct LoadTask {
+        PlacedTile* tile    = nullptr;
+        std::string sprPath;
+        std::string vfsRoot;
+        bool   useAnim  = false;
+        int    animIdx  = 0;
+        int    frameIdx = 0;
+    };
+
+    // Upload queue: worker → GUI thread
+    std::mutex                 _uploadMutex;
+    std::vector<PendingUpload> _pendingUploads;
+
+    // Task queue: GUI thread → workers
+    std::mutex               _taskMutex;
+    std::condition_variable  _taskCV;
+    std::vector<LoadTask>    _taskQueue;
+    bool                     _workerStop = false;
+
+    // Thread pool
+    static constexpr int kNumWorkers = 8;
+    std::vector<std::thread> _workerThreads;
+
+    void WorkerLoop();    // tiêu thụ _taskQueue
+    void StartWorkers();
+    void StopWorkers();
+
+    // ── Background map loading ────────────────────────────────
+    struct LoadResult {
+        bool success = false;
+        std::string folderPath;
+        int mapWidth = 0, mapHeight = 0, unitSize = 0;
+        int exportType = 1;
+        std::vector<std::vector<std::vector<ObstacleEdit>>>            obstacles;
+        std::vector<std::vector<std::vector<std::vector<PlacedTile>>>> tiles;
+    };
+
+    std::atomic<bool>   _isLoading{false};
+    std::atomic<float>  _loadProgress{0.f};
+    std::thread         _loadThread;
+    std::mutex          _loadResultMutex;
+    std::unique_ptr<LoadResult> _pendingResult;
+    std::string         _pendingLoadPath;
+
+    void PollLoadResult();
 };

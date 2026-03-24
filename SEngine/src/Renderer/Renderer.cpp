@@ -196,10 +196,74 @@ void Renderer::DrawRect(float x, float y, float w, float h,
     glEnable(GL_TEXTURE_2D);
 }
 
+void Renderer::DrawHatchRect(float x, float y, float w, float h,
+                              float r, float g, float b, float a,
+                              float spacing)
+{
+    if (w <= 0.f || h <= 0.f) return;
+
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColor4f(r, g, b, a);
+
+    // Outline
+    glBegin(GL_LINE_LOOP);
+        glVertex2f(x,     y    );
+        glVertex2f(x + w, y    );
+        glVertex2f(x + w, y + h);
+        glVertex2f(x,     y + h);
+    glEnd();
+
+    // Đường chéo //// bên trong (45 độ, từ trái-dưới lên phải-trên)
+    // Ta duyệt offset t từ -(h) đến w theo bước spacing
+    // Mỗi đường: từ điểm trên cạnh trái/đáy đến điểm trên cạnh phải/đỉnh
+    // Line: điểm xuất phát (x + t, y+h) → (x + t + h, y)  (nghiêng 45°)
+    // Clip vào trong [x, x+w] × [y, y+h]
+    glBegin(GL_LINES);
+    for (float t = -h; t < w; t += spacing)
+    {
+        // Đường từ (x+t, y+h) → (x+t+h, y)
+        float x0 = x + t;
+        float y0 = y + h;
+        float x1 = x + t + h;
+        float y1 = y;
+
+        // Clip x0 vào [x, x+w]
+        if (x0 < x)
+        {
+            // Cắt từ trái: tính lại y0
+            float dx = x - x0;
+            y0 = y0 - dx;   // slope = -1 (dy/dx = -1)
+            x0 = x;
+        }
+        if (x1 > x + w)
+        {
+            float dx = x1 - (x + w);
+            y1 = y1 + dx;
+            x1 = x + w;
+        }
+        // Clip y0 vào [y, y+h]
+        if (y0 > y + h) { float dy = y0 - (y + h); x0 += dy; y0 = y + h; }
+        if (y1 < y)     { float dy = y - y1;        x1 -= dy; y1 = y;     }
+        if (y0 < y)     { float dy = y - y0;        x0 -= dy; y0 = y;     }
+        if (y1 > y + h) { float dy = y1 - (y + h);  x1 += dy; y1 = y + h;}
+
+        // Bỏ nếu segment ngoài vùng
+        if (x0 > x + w || x1 < x || x0 > x1) continue;
+
+        glVertex2f(x0, y0);
+        glVertex2f(x1, y1);
+    }
+    glEnd();
+
+    glColor4f(1.f, 1.f, 1.f, 1.f);
+    glEnable(GL_TEXTURE_2D);
+}
+
 void Renderer::DrawTest()
 {
     static unsigned int tex = LoadTexture("test.png");
-
     DrawTexture(tex,100,100,256,256);
 }
 

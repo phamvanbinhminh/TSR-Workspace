@@ -1,19 +1,29 @@
 #pragma once
 #include "../Object/Object.h"
 #include "../Components/TransformComponent.h"
+#include "../../ResManager/Map/Map.h"
 #include <vector>
 
-// PhysicsSystem: stub – giới hạn entity không ra khỏi màn hình
-// Mở rộng sau: AABB collision, gravity, ...
+// PhysicsSystem: va chạm AABB với obstacle từ Map (RegionS)
+// Mỗi entity cần có TransformComponent.
+// Kích thước AABB của entity được set qua SetEntitySize().
 class PhysicsSystem
 {
 public:
-    PhysicsSystem(float worldW = 800.f, float worldH = 600.f)
-        : _worldW(worldW), _worldH(worldH) {}
+    // entityW/H: kích thước hitbox mặc định của entity (pixels)
+    PhysicsSystem(float entityW = 32.f, float entityH = 32.f)
+        : _entityW(entityW), _entityH(entityH), _map(nullptr) {}
 
-    void SetWorldSize(float w, float h) { _worldW = w; _worldH = h; }
+    // Gán map để lấy obstacle data
+    void SetMap(Map* map) { _map = map; }
 
-    void Update(float /*dt*/, const std::vector<Object*>& objects)
+    // Thay đổi kích thước hitbox mặc định
+    void SetEntitySize(float w, float h) { _entityW = w; _entityH = h; }
+
+    // Tương thích ngược: giữ lại SetWorldSize nhưng không dùng để clamp nữa
+    void SetWorldSize(float /*w*/, float /*h*/) {}
+
+    void Update(float dt, const std::vector<Object*>& objects)
     {
         for (auto* obj : objects)
         {
@@ -21,15 +31,56 @@ public:
             auto* tf = obj->GetComponent<TransformComponent>();
             if (!tf) continue;
 
-            // Clamp position trong world bounds (đơn giản)
-            if (tf->x < 0.f) { tf->x = 0.f; tf->vx = 0.f; }
-            if (tf->y < 0.f) { tf->y = 0.f; tf->vy = 0.f; }
-            if (tf->x > _worldW) { tf->x = _worldW; tf->vx = 0.f; }
-            if (tf->y > _worldH) { tf->y = _worldH; tf->vy = 0.f; }
+            if (!_map) continue; // chưa có map thì bỏ qua
+
+            // Slide collision: check từng trục độc lập
+            // MovementSystem đã cập nhật tf->x, tf->y theo velocity.
+            // Ta lưu lại vị trí hiện tại (đã move), rồi rollback từng trục.
+            float curX = tf->x;          // X sau khi move
+            float curY = tf->y;          // Y sau khi move
+            float prevX = curX - tf->vx * dt;  // X trước khi move
+            float prevY = curY - tf->vy * dt;  // Y trước khi move
+
+            float resolvedX = curX;
+            float resolvedY = curY;
+
+            // Helper lambda: thử CheckCollisionClient trước, fallback CheckCollision (server)
+            auto collide = [&](float x, float y) -> bool {
+                bool hit = _map->CheckCollisionClient(x, y, _entityW, _entityH);
+                if (!hit) hit = _map->CheckCollision(x, y, _entityW, _entityH);
+                return hit;
+            };
+
+            // ── Check trục X (giữ Y cũ) ──────────────────────
+            if (collide(curX, prevY))
+            {
+                resolvedX = prevX;  // rollback X
+                tf->vx    = 0.f;
+            }
+
+            // ── Check trục Y (dùng X đã resolve) ─────────────
+            if (collide(resolvedX, curY))
+            {
+                resolvedY = prevY;  // rollback Y
+                tf->vy    = 0.f;
+            }
+
+            // ── Final: nếu vẫn collide thì giữ vị trí cũ hoàn toàn
+            if (collide(resolvedX, resolvedY))
+            {
+                resolvedX = prevX;
+                resolvedY = prevY;
+                tf->vx    = 0.f;
+                tf->vy    = 0.f;
+            }
+
+            tf->x = resolvedX;
+            tf->y = resolvedY;
         }
     }
 
 private:
-    float _worldW;
-    float _worldH;
+    float _entityW; // hitbox width
+    float _entityH; // hitbox height
+    Map*  _map;     // server map (RegionS obstacles)
 };

@@ -23,7 +23,12 @@ public:
     Map(Map&&)                 = default;
     Map& operator=(Map&&)      = default;
 
+    // Client: chỉ đọc .map header, RegionC lazy-load qua LoadRegionAround()
     bool Load(const std::string& folder);
+    // Server: đọc header + load toàn bộ RegionS (obstacle data)
+    bool LoadServer(const std::string& folder);
+    bool LoadMapFile(const std::string& file);
+    bool LoadMapFromFolder(const std::string& folder);
 
     int GetWidth()    const { return _width;    }
     int GetHeight()   const { return _height;   }
@@ -48,6 +53,9 @@ public:
     // Vẽ grid debug
     void DrawGrid(Renderer& renderer, int size);
 
+    // Vẽ tất cả obstacle của các region đã load dạng //// màu đỏ (debug)
+    void DrawObstaclesDebug(Renderer& renderer);
+
     // Tổng số layer (lấy từ region đầu tiên được load)
     int GetLayerCount() const { return _maxLayers; }
 
@@ -57,8 +65,11 @@ public:
     // Kiểm tra AABB (wx,wy,w,h) có va chạm với obstacle trong map không
     bool CheckCollision(float wx, float wy, float w, float h) const;
 
+    // Client-side collision check dùng _clientRegions (RegionC obstacle data)
+    bool CheckCollisionClient(float wx, float wy, float w, float h) const;
+
 private:
-    bool LoadMapFile(const std::string& file);
+
 
     int     _width    = 0;
     int     _height   = 0;

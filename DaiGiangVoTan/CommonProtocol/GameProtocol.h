@@ -96,6 +96,14 @@ struct C2S_Move
     float        y;
     uint8_t      animState;     // AnimState enum
     uint8_t      _pad[3];       // padding để align
+
+    // Hitbox của entity (tương đối so với vị trí x,y)
+    // Client lấy từ SpriteComponent::GetHitbox()
+    // Server dùng để check collision với map obstacles
+    int16_t      hitboxX;       // offset X từ x
+    int16_t      hitboxY;       // offset Y từ y
+    int16_t      hitboxW;       // width
+    int16_t      hitboxH;       // height
 };
 
 // ── S2C_PlayerMove ──────────────────────────────────────────────

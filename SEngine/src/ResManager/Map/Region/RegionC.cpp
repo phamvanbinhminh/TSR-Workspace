@@ -121,7 +121,11 @@ bool RegionC::Load(const std::string& file)
     int version = 0;
     f.read((char*)&version, sizeof(int));
 
-    ReadObstacles(f, _obstacles);
+    // version 3: không có obstacle table (chỉ có layers)
+    // version 4+: có obstacle table trước layers
+    if (version >= 4)
+        ReadObstacles(f, _obstacles);
+
     ReadLayers(f, _layers);
 
     _loaded = true;
@@ -266,24 +270,29 @@ bool RegionC::LoadTile(TileEntry& tile, Renderer& renderer)
     tile.loaded = true;
     return true;
 }
+// ── PreloadTiles: load toàn bộ tiles lên GPU ngay khi region được add ─
+// Gọi 1 lần duy nhất sau khi Load() xong, không gọi trong render loop.
+void RegionC::PreloadTiles(Renderer& renderer)
+{
+    for (auto& layer : _layers)
+        for (auto& tile : layer)
+            if (!tile.loaded)
+                LoadTile(tile, renderer);
+}
+
 // ── DrawLayer ─────────────────────────────────────────────────
+// Chỉ render — không load gì ở đây nữa.
 void RegionC::DrawLayer(Renderer& renderer, float offsetX, float offsetY, int layerIdx)
 {
     if (layerIdx < 0 || layerIdx >= (int)_layers.size()) return;
 
-    for (TileEntry& tile : _layers[layerIdx])
+    for (const TileEntry& tile : _layers[layerIdx])
     {
-        if (!tile.loaded)
-            if(!LoadTile(tile, renderer)){
-                std::cerr << "[RegionC] Không load được tile: " << tile.sprPath << "\n";
-                continue;
-            }
-        
-        // world position = tile.x + offsetX, tile.y + offsetY
-        // pivot offset: vẽ từ góc trên-trái = (pos - pivot)
-        // float drawX = tile.x + offsetX - tile.pivotX;
-        // float drawY = tile.y + offsetY - tile.pivotY;
-        float drawX = offsetX - tile.pivotX;
+        if (!tile.loaded || tile.texID == 0) continue;
+
+        //Tuyệt đối không cộng title.x/y vào offsetX/Y vì tile.x/y đã được bake vào region_C_y.dat
+        // trừ pivot để texture render đúng gốc tọa độ
+        float drawX = offsetX  - tile.pivotX;
         float drawY = offsetY - tile.pivotY;
 
         renderer.DrawTexture(tile.texID, drawX, drawY,

@@ -5,6 +5,7 @@
 #include "ResManager/VFS/VFS.h"
 #include "../../../CommonProtocol/GameProtocol.h"
 
+#include <GLFW/glfw3.h>
 #include <iostream>
 #include <algorithm>
 #include <filesystem>
@@ -73,6 +74,10 @@ void GameScene::Init()
             std::cout << "[GameScene] Không tìm thấy map folder: " << tryPath << "\n";
     }
 
+    // Gán map cho PhysicsSystem để client-side collision hoạt động
+    if (_map)
+        _ecsScene.GetPhysicsSystem().SetMap(_map.get());
+
     // Tạo nhân vật chính tại đúng vị trí server trả về
     SpawnPlayer();
 
@@ -93,6 +98,18 @@ void GameScene::Init()
 
 void GameScene::Update(float dt)
 {
+    // ── F1 toggle debug collision overlay ────────────────────
+    {
+        bool f1Now = (glfwGetKey(_window, GLFW_KEY_F1) == GLFW_PRESS);
+        if (f1Now && !_f1Pressed)
+        {
+            _debugCollision = !_debugCollision;
+            std::cout << "[Debug] Collision overlay: "
+                      << (_debugCollision ? "ON" : "OFF") << "\n";
+        }
+        _f1Pressed = f1Now;
+    }
+
     // ── Kiểm tra bị kick bởi server ──────────────────────────
     if (_gameClient.WasKicked())
     {
@@ -129,12 +146,7 @@ void GameScene::Update(float dt)
             float camY = py - _screenH * 0.5f;
             _renderer->SetCamera(camX, camY);
         }
-
-        int layers = _map->GetLayerCount();
-
-        for (int l = 0; l < layers; l++)
-            _map->DrawLayer(*_renderer, l); 
-    }
+    } // end if (_map)
 
     // Gửi vị trí + animState nhân vật lên server mỗi _sendInterval giây
     if (_gameClient.IsConnected())
@@ -165,7 +177,17 @@ void GameScene::Update(float dt)
                         else                               animSt = ANIM_IDLE_DOWN;
                     }
                 }
-                _gameClient.SendMove(px, py, animSt);
+                // Lấy hitbox từ SpriteComponent frame hiện tại
+                int hx = 0, hy = 0, hw = 16, hh = 24; // fallback default
+                if (playerObj)
+                {
+                    SpriteComponent* spr2 = playerObj->GetComponent<SpriteComponent>();
+                    if (spr2)
+                        spr2->GetHitbox(hx, hy, hw, hh);
+                }
+                _gameClient.SendMove(px, py, animSt,
+                                     (int16_t)hx, (int16_t)hy,
+                                     (int16_t)hw, (int16_t)hh);
             }
         }
     }
@@ -256,14 +278,44 @@ void GameScene::Render()
     // ── 0. Map tiles (dưới mọi entity) ───────────────────────
     if (_map)
     {
+        if (_debugCollision)
+            _map->DrawGrid(*_renderer, _map->GetUnitSize());
         int layers = _map->GetLayerCount();
         for (int l = 0; l < layers; l++)
             _map->DrawLayer(*_renderer, l);
+
+
+
+        // Debug: vẽ obstacle //// đỏ (F1 toggle)
+        if (_debugCollision)
+            {
+                _map->DrawObstaclesDebug(*_renderer);
+             }
+            // ── 1. ECS entities (nhân vật chính, ...) ────────────────
+        _ecsScene.Render();
+
+                if (_debugCollision)
+            {
+                //Vẽ hit box cho player
+                float px = 0, py = 0;
+                if (GetPlayerPos(px, py))
+                {
+                    const Object* playerObj = _ecsScene.FindObject("Player");
+                    if (playerObj)
+                    {
+                        SpriteComponent* spr = playerObj->GetComponent<SpriteComponent>();
+                        if (spr)
+                        {
+                            int hx, hy, hw, hh;
+                            spr->GetHitbox(hx, hy, hw, hh);
+                            _renderer->DrawHatchRect(px + hx, py + hy, hw, hh,
+                                                     1.f, 0.f, 0.f, 0.6f);
+                        }
+                    }
+                }
+             }
+
     }
-
-    // ── 1. ECS entities (nhân vật chính, ...) ────────────────
-    _ecsScene.Render();
-
     // ── 2. Remote players ─────────────────────────────────────
     auto remotePlayers = _gameClient.GetRemotePlayers();
     for (auto& [id, rp] : remotePlayers)

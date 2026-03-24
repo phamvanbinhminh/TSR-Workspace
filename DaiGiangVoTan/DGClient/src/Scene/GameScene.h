@@ -121,4 +121,8 @@ private:
 
     // Load map từ folder
     void LoadMap(const std::string& folder);
+
+    // Debug
+    bool _debugCollision  = false;  // F1 toggle: vẽ obstacle //// đỏ
+    bool _f1Pressed       = false;  // debounce
 };

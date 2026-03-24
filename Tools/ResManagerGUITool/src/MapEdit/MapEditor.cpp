@@ -2,6 +2,7 @@
 #include "MapEditor.h"
 #include "ResManager/Map/Map.h"
 #include "ResManager/Spr/Spr.h"
+#include "Core/AppConfig.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -18,6 +19,11 @@
 #include <filesystem>
 #include <cstring>
 #include <cmath>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <chrono>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -52,15 +58,158 @@ static unsigned int UploadTex(const void* pixels, int w, int h)
 // ═══════════════════════════════════════════════════════════
 // Constructor / Destructor
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// Thread pool: WorkerLoop / StartWorkers / StopWorkers
+// ═══════════════════════════════════════════════════════════
+// ── SPR file cache (shared across worker threads) ─────────
+// Tránh đọc cùng 1 file nhiều lần khi nhiều tiles dùng chung 1 SPR
+struct SprCacheEntry {
+    SprLoadedData data;
+    bool          ok = false;
+};
+static std::mutex                                        s_sprCacheMutex;
+static std::unordered_map<std::string, SprCacheEntry>   s_sprCache;
+
+static const SprCacheEntry* GetOrLoadSpr(const std::string& resolvedPath)
+{
+    // Fast path: đã có trong cache
+    {
+        std::lock_guard<std::mutex> lk(s_sprCacheMutex);
+        auto it = s_sprCache.find(resolvedPath);
+        if (it != s_sprCache.end())
+            return &it->second;
+    }
+
+    // Load từ disk (không giữ lock)
+    SprCacheEntry entry;
+    SprReader reader;
+    entry.ok = reader.LoadFromFile(resolvedPath, entry.data);
+
+    // Insert vào cache
+    {
+        std::lock_guard<std::mutex> lk(s_sprCacheMutex);
+        // Double-check: thread khác có thể đã insert rồi
+        auto it = s_sprCache.find(resolvedPath);
+        if (it != s_sprCache.end())
+            return &it->second;
+        s_sprCache[resolvedPath] = std::move(entry);
+        return &s_sprCache[resolvedPath];
+    }
+}
+
+void MapEditor::WorkerLoop()
+{
+    while (true)
+    {
+        LoadTask task;
+        {
+            std::unique_lock<std::mutex> lk(_taskMutex);
+            _taskCV.wait(lk, [this]{ return _workerStop || !_taskQueue.empty(); });
+            if (_workerStop && _taskQueue.empty()) return;
+            task = std::move(_taskQueue.back());
+            _taskQueue.pop_back();
+        }
+
+        // Tile đã bị free/reset trong lúc chờ → bỏ qua
+        if (!task.tile || task.tile->loadState != 1) continue;
+
+        PendingUpload result;
+        result.tile    = task.tile;
+        result.success = false;
+
+        // Resolve path
+        std::string resolvedPath = task.sprPath;
+        if (!resolvedPath.empty() && !fs::path(resolvedPath).is_absolute())
+        {
+            if (!task.vfsRoot.empty())
+            {
+                std::string candidate = task.vfsRoot + "/" + resolvedPath;
+                if (fs::exists(candidate)) resolvedPath = candidate;
+            }
+        }
+
+        // Dùng SPR cache để tránh đọc cùng 1 file nhiều lần
+        const SprCacheEntry* cached = GetOrLoadSpr(resolvedPath);
+        if (cached && cached->ok)
+        {
+            const SprLoadedData& data = cached->data;
+            result.pivotX  = data.header.pivotX;
+            result.pivotY  = data.header.pivotY;
+            result.useAnim = task.useAnim;
+
+            if (task.useAnim && task.animIdx < (int)data.animations.size())
+            {
+                const auto& a = data.animations[task.animIdx];
+                result.fps = a.fps > 0 ? (int)a.fps : 30;
+                int start  = (int)a.startFrame;
+                int count  = (int)a.frameCount;
+                for (int i = start; i < start + count && i < (int)data.frames.size(); i++)
+                {
+                    const auto& f = data.frames[i];
+                    PendingUpload::FrameData fd;
+                    fd.pixels = f.pixels; // copy pixels (cache giữ bản gốc)
+                    fd.w = f.width; fd.h = f.height;
+                    result.frames.push_back(std::move(fd));
+                }
+            }
+            else
+            {
+                result.fps = 0;
+                int fi = task.frameIdx;
+                if (fi >= 0 && fi < (int)data.frames.size())
+                {
+                    const auto& f = data.frames[fi];
+                    PendingUpload::FrameData fd;
+                    fd.pixels = f.pixels;
+                    fd.w = f.width; fd.h = f.height;
+                    result.frames.push_back(std::move(fd));
+                }
+            }
+            result.success = true;
+        }
+
+        task.tile->loadState = 2; // pending GL upload
+
+        {
+            std::lock_guard<std::mutex> lk(_uploadMutex);
+            _pendingUploads.push_back(std::move(result));
+        }
+    }
+}
+
+void MapEditor::StartWorkers()
+{
+    _workerStop = false;
+    _workerThreads.reserve(kNumWorkers);
+    for (int i = 0; i < kNumWorkers; i++)
+        _workerThreads.emplace_back(&MapEditor::WorkerLoop, this);
+}
+
+void MapEditor::StopWorkers()
+{
+    {
+        std::lock_guard<std::mutex> lk(_taskMutex);
+        _workerStop = true;
+    }
+    _taskCV.notify_all();
+    for (auto& t : _workerThreads)
+        if (t.joinable()) t.join();
+    _workerThreads.clear();
+}
+
 MapEditor::MapEditor()
 {
     // Mặc định VFS root = thư mục chạy editor (bin/SResManager)
     _vfsRoot = fs::current_path().generic_string();
     strncpy(_vfsRootBuf, _vfsRoot.c_str(), sizeof(_vfsRootBuf) - 1);
+    StartWorkers();
 }
 
 MapEditor::~MapEditor()
 {
+    StopWorkers();
+    if (_loadThread.joinable()) _loadThread.join();
+
     for (auto& rowY : _regionTiles)
     for (auto& rowX : rowY)
     for (auto& layer : rowX)
@@ -296,7 +445,147 @@ void MapEditor::FreeTilePreview(PlacedTile& tile)
     for (auto t : tile.frameTex) if (t) glDeleteTextures(1, &t);
     tile.frameTex.clear();
     tile.previewTexID = 0;
-    tile.loaded = false;
+    tile.loaded    = false;
+    tile.loadState = 0; // reset về unloaded
+}
+
+// ═══════════════════════════════════════════════════════════
+// QueueTileLoad  — đẩy tile vào background thread để đọc SPR
+// Chỉ cần decode pixel, KHÔNG gọi OpenGL.
+// ═══════════════════════════════════════════════════════════
+void MapEditor::QueueTileLoad(PlacedTile& tile)
+{
+    if (tile.loadState != 0) return; // đã queue / loading / loaded
+    tile.loadState = 1; // queued
+
+    LoadTask task;
+    task.tile     = &tile;
+    task.sprPath  = tile.sprPath;
+    task.vfsRoot  = _vfsRoot;
+    task.useAnim  = tile.useAnim;
+    task.animIdx  = tile.animIdx;
+    task.frameIdx = tile.frameIdx;
+
+    {
+        std::lock_guard<std::mutex> lk(_taskMutex);
+        _taskQueue.push_back(std::move(task));
+    }
+    _taskCV.notify_one(); // đánh thức 1 worker
+}
+
+// ═══════════════════════════════════════════════════════════
+// PollPendingUploads  — gọi từ GUI thread, upload GL texture
+// từ kết quả đã được decode bởi worker threads.
+// ═══════════════════════════════════════════════════════════
+void MapEditor::PollPendingUploads()
+{
+    std::vector<PendingUpload> batch;
+    {
+        std::lock_guard<std::mutex> lk(_uploadMutex);
+        batch.swap(_pendingUploads);
+    }
+
+    for (auto& pu : batch)
+    {
+        if (!pu.tile) continue;
+        PlacedTile& tile = *pu.tile;
+
+        // Nếu tile bị free trong lúc đang load → bỏ qua
+        if (tile.loadState != 2) continue;
+
+        if (!pu.success || pu.frames.empty())
+        {
+            tile.loadState = 3; // đánh dấu xong (dù fail) để không retry mãi
+            tile.loaded    = false;
+            continue;
+        }
+
+        tile.pivotX = pu.pivotX;
+        tile.pivotY = pu.pivotY;
+        tile.fps    = pu.fps;
+
+        for (const auto& fd : pu.frames)
+        {
+            unsigned int tex = UploadTex(fd.pixels.empty() ? nullptr : fd.pixels.data(), fd.w, fd.h);
+            tile.frameTex.push_back(tex);
+            if (tile.frameW == 0) { tile.frameW = fd.w; tile.frameH = fd.h; }
+        }
+
+        tile.totalFrames  = (int)tile.frameTex.size();
+        tile.curFrame     = 0;
+        tile.animTimer    = 0.f;
+        tile.previewTexID = tile.frameTex.empty() ? 0 : tile.frameTex[0];
+        tile.loaded       = true;
+        tile.loadState    = 3; // loaded
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+// PollLoadResult  — gọi từ GUI thread để nhận kết quả LoadMap bg thread
+// ═══════════════════════════════════════════════════════════
+void MapEditor::PollLoadResult()
+{
+    if (!_isLoading.load()) return;
+
+    std::unique_ptr<LoadResult> result;
+    {
+        std::lock_guard<std::mutex> lk(_loadResultMutex);
+        result = std::move(_pendingResult);
+    }
+    if (!result) return; // chưa xong
+
+    // Load thread xong → apply kết quả trên GUI thread
+    _isLoading.store(false);
+    if (_loadThread.joinable()) _loadThread.join();
+
+    if (!result->success)
+    {
+        snprintf(_statusMsg, sizeof(_statusMsg), "LOAD FAILED: %s", result->folderPath.c_str());
+        _statusTimer = 5.f;
+        return;
+    }
+
+    _currentMapPath = result->folderPath;
+    _mapWidth       = result->mapWidth;
+    _mapHeight      = result->mapHeight;
+    _unitSize       = result->unitSize;
+    _exportType     = result->exportType;
+    _unsavedChanges = false;
+    ClearSelection();
+    _viewScale = 1.f; _viewOffsetX = _viewOffsetY = 0.f;
+
+    _regionObstacles = std::move(result->obstacles);
+    _regionTiles     = std::move(result->tiles);
+
+    snprintf(_statusMsg, sizeof(_statusMsg), "Loaded: %s  (%dx%d, unit=%d)",
+             fs::path(_currentMapPath).filename().string().c_str(),
+             _mapWidth, _mapHeight, _unitSize);
+    _statusTimer = 4.f;
+}
+
+// ── IsVisible: kiểm tra tile có nằm trong viewport canvas không ──
+// Dùng _viewOffsetX/Y, _viewScale để tính screen rect của tile,
+// so sánh với canvas size (lấy từ ImGui content region).
+bool MapEditor::IsVisible(const PlacedTile& tile) const
+{
+    // Tính screen rect của tile (top-left sau khi áp pivot)
+    float drawX = tile.x - tile.pivotX;
+    float drawY = tile.y - tile.pivotY;
+
+    // Screen position (không cộng canvasP0 vì chỉ cần cull tương đối)
+    float sx = _viewOffsetX + drawX * _viewScale;
+    float sy = _viewOffsetY + drawY * _viewScale;
+    float sw = (tile.frameW > 0 ? tile.frameW : 64) * _viewScale;
+    float sh = (tile.frameH > 0 ? tile.frameH : 64) * _viewScale;
+
+    // Canvas size (lấy kích thước ImGui content region hiện tại)
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    float cw = avail.x > 0 ? avail.x : 800.f;
+    float ch = avail.y > 0 ? avail.y : 600.f;
+
+    // AABB overlap: tile rect [sx, sx+sw] x [sy, sy+sh] vs canvas [0, cw] x [0, ch]
+    return (sx + sw > 0.f) && (sx < cw) &&
+           (sy + sh > 0.f) && (sy < ch);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -428,167 +717,173 @@ void MapEditor::EraseTileAt(float worldX, float worldY, int layer)
 }
 
 // ═══════════════════════════════════════════════════════════
-// LoadMap  — load region_S (obstacles) + region_C (tiles)
+// LoadMap  — khởi động background thread để đọc region files
+//            (không block GUI thread)
 // ═══════════════════════════════════════════════════════════
 bool MapEditor::LoadMap(const std::string& folderPath)
 {
-    _map.reset();
-    _map = std::make_unique<Map>();
-    if (!_map->Load(folderPath))
+    // Nếu đang load rồi thì bỏ qua
+    if (_isLoading.load()) return false;
+
+    // Parse .map file ngay trên GUI thread (nhẹ, chỉ đọc 1 file text nhỏ)
+    auto tmpMap = std::make_unique<Map>();
+    if (!tmpMap->LoadMapFromFolder(folderPath))
     {
-        snprintf(_statusMsg, sizeof(_statusMsg), "LOAD FAILED: %s", folderPath.c_str());
+        snprintf(_statusMsg, sizeof(_statusMsg), "LOAD FAILED: cannot read .map file in %s", folderPath.c_str());
         _statusTimer = 5.f;
         return false;
     }
-    _currentMapPath = folderPath;
-    _mapWidth  = _map->GetWidth();
-    _mapHeight = _map->GetHeight();
-    _unitSize  = _map->GetUnitSize();
-    // mirror export type from loaded map
-    if (_map->GetMapType() == Map::MapType::S)      _exportType = 0;
-    else if (_map->GetMapType() == Map::MapType::C) _exportType = 1;
-    _unsavedChanges = false;
-    ClearSelection();
-    _viewScale = 1.f; _viewOffsetX = _viewOffsetY = 0.f;
 
-    // Free old tile previews
+    int mapW    = tmpMap->GetWidth();
+    int mapH    = tmpMap->GetHeight();
+    int unitSz  = tmpMap->GetUnitSize();
+    int expType = (tmpMap->GetMapType() == Map::MapType::S) ? 0 : 1;
+    tmpMap.reset();
+
+    int rw = (unitSz > 0) ? mapW / unitSz : 0;
+    int rh = (unitSz > 0) ? mapH / unitSz : 0;
+
+    // Free old tile textures trước khi replace
     for (auto& rowY : _regionTiles)
     for (auto& rowX : rowY)
     for (auto& layer : rowX)
     for (auto& tile : layer)
         FreeTilePreview(tile);
+    _regionTiles.clear();
+    _regionObstacles.clear();
 
-    int rw = (_unitSize > 0) ? _mapWidth  / _unitSize : 0;
-    int rh = (_unitSize > 0) ? _mapHeight / _unitSize : 0;
-    EnsureRegionArrays(rw, rh);
+    // Đánh dấu đang load
+    _isLoading.store(true);
+    _loadProgress.store(0.f);
+    _pendingLoadPath = folderPath;
 
-    // ── Helpers to read obstacles from open ifstream ─────────
-    auto readObs = [&](std::ifstream& f, int y, int x)
+    // Lưu lại trước khi thread start
+    std::string vfsRoot   = _vfsRoot;
+
+    // Đợi load thread cũ (nếu có) kết thúc
+    if (_loadThread.joinable()) _loadThread.join();
+
+    // ── Background thread ────────────────────────────────────
+    _loadThread = std::thread([this, folderPath, rw, rh, mapW, mapH, unitSz, expType, vfsRoot]()
     {
-        int obsCount = 0;
-        f.read((char*)&obsCount, sizeof(int));
-        if (obsCount < 0 || obsCount > 100000) return;
-        for (int i = 0; i < obsCount; i++)
-        {
-            ObstacleEdit ob;
-            f.read((char*)&ob.x, sizeof(float));
-            f.read((char*)&ob.y, sizeof(float));
-            f.read((char*)&ob.w, sizeof(float));
-            f.read((char*)&ob.h, sizeof(float));
-            _regionObstacles[y][x].push_back(ob);
-        }
-    };
+        auto result = std::make_unique<LoadResult>();
+        result->folderPath  = folderPath;
+        result->mapWidth    = mapW;
+        result->mapHeight   = mapH;
+        result->unitSize    = unitSz;
+        result->exportType  = expType;
+        result->success     = false;
 
-    auto readLayers = [&](std::ifstream& f, int y, int x)
-    {
-        int layerCount = 0;
-        f.read((char*)&layerCount, sizeof(int));
-        if (layerCount <= 0 || layerCount > 64) return;
-        if ((int)_regionTiles[y][x].size() < layerCount)
-            _regionTiles[y][x].resize(layerCount);
-        for (int l = 0; l < layerCount; l++)
+        // Pre-allocate region arrays
+        result->obstacles.assign(rh, std::vector<std::vector<ObstacleEdit>>(rw));
+        result->tiles.assign(rh, std::vector<std::vector<std::vector<PlacedTile>>>(rw));
+
+        int total = rw * rh;
+        int done  = 0;
+
+        // ── Helpers (lokale lambdas) ─────────────────────────
+        auto readObs = [](std::ifstream& f,
+                          std::vector<std::vector<std::vector<ObstacleEdit>>>& obstacles,
+                          int y, int x)
         {
-            int tileCount = 0;
-            f.read((char*)&tileCount, sizeof(int));
-            if (tileCount < 0 || tileCount > 500000) continue;
-            for (int ti = 0; ti < tileCount; ti++)
+            int obsCount = 0;
+            f.read((char*)&obsCount, sizeof(int));
+            if (obsCount < 0 || obsCount > 100000) return;
+            for (int i = 0; i < obsCount; i++)
             {
-                PlacedTile tile;
-                tile.layer = l;
-                int plen = 0;
-                f.read((char*)&plen, sizeof(int));
-                if (plen > 0 && plen < 1024) {
-                    tile.sprPath.resize(plen);
-                    f.read(&tile.sprPath[0], plen);
-                }
-                uint8_t ua = 0;
-                f.read((char*)&ua, 1);
-                tile.useAnim = (ua != 0);
-                f.read((char*)&tile.animIdx,  sizeof(int));
-                f.read((char*)&tile.frameIdx, sizeof(int));
-                f.read((char*)&tile.x,        sizeof(float));
-                f.read((char*)&tile.y,        sizeof(float));
-                _regionTiles[y][x][l].push_back(std::move(tile));
+                ObstacleEdit ob;
+                f.read((char*)&ob.x, sizeof(float));
+                f.read((char*)&ob.y, sizeof(float));
+                f.read((char*)&ob.w, sizeof(float));
+                f.read((char*)&ob.h, sizeof(float));
+                obstacles[y][x].push_back(ob);
             }
-        }
-    };
+        };
 
-    // ── Load region files ────────────────────────────────────
-    for (int y = 0; y < rh; y++)
-    for (int x = 0; x < rw; x++)
-    {
-        char pathS[512], pathC[512];
-        snprintf(pathS, sizeof(pathS), "%s/Region/%d/region_S_%d.dat", folderPath.c_str(), x, y);
-        snprintf(pathC, sizeof(pathC), "%s/Region/%d/region_C_%d.dat", folderPath.c_str(), x, y);
-
-        // ── Load region_S (obstacles) ────────────────────────
-        if (fs::exists(pathS))
+        auto readLayers = [](std::ifstream& f,
+                             std::vector<std::vector<std::vector<std::vector<PlacedTile>>>>& tiles,
+                             int y, int x)
         {
-            std::ifstream f(pathS, std::ios::binary);
-            if (f)
+            int layerCount = 0;
+            f.read((char*)&layerCount, sizeof(int));
+            if (layerCount <= 0 || layerCount > 64) return;
+            if ((int)tiles[y][x].size() < layerCount)
+                tiles[y][x].resize(layerCount);
+            for (int l = 0; l < layerCount; l++)
             {
-                char magic[14] = {};
-                f.read(magic, 13);
-                if (strncmp(magic, "REGION_DATA_S", 13) == 0)
+                int tileCount = 0;
+                f.read((char*)&tileCount, sizeof(int));
+                if (tileCount < 0 || tileCount > 500000) continue;
+                for (int ti = 0; ti < tileCount; ti++)
                 {
-                    int version = 0;
-                    f.read((char*)&version, sizeof(int));
-                    readObs(f, y, x);
+                    PlacedTile tile;
+                    tile.layer = l;
+                    int plen = 0;
+                    f.read((char*)&plen, sizeof(int));
+                    if (plen > 0 && plen < 1024) {
+                        tile.sprPath.resize(plen);
+                        f.read(&tile.sprPath[0], plen);
+                    }
+                    uint8_t ua = 0;
+                    f.read((char*)&ua, 1);
+                    tile.useAnim = (ua != 0);
+                    f.read((char*)&tile.animIdx,  sizeof(int));
+                    f.read((char*)&tile.frameIdx, sizeof(int));
+                    f.read((char*)&tile.x,        sizeof(float));
+                    f.read((char*)&tile.y,        sizeof(float));
+                    tiles[y][x][l].push_back(std::move(tile));
                 }
             }
-        }
+        };
 
-        // ── Load region_C (tiles) ─────────────────────────────
-        if (fs::exists(pathC))
+        // ── Read all regions — chỉ đọc region_C ─────────────
+        // region_C (version 4) chứa đủ: obstacle table + tile layers.
+        // region_S chỉ dùng bởi server, editor không cần đọc riêng.
+        for (int y = 0; y < rh; y++)
+        for (int x = 0; x < rw; x++)
         {
-            std::ifstream f(pathC, std::ios::binary);
-            if (f)
+            char pathC[512];
+            snprintf(pathC, sizeof(pathC), "%s/Region/%d/region_C_%d.dat", folderPath.c_str(), x, y);
+
+            if (fs::exists(pathC))
             {
-                char magic[14] = {};
-                f.read(magic, 13);
-                if (strncmp(magic, "REGION_DATA_C", 13) == 0)
+                std::ifstream f(pathC, std::ios::binary);
+                if (f)
                 {
-                    int version = 0;
-                    f.read((char*)&version, sizeof(int));
+                    char magic[14] = {};
+                    f.read(magic, 13);
+                    if (strncmp(magic, "REGION_DATA_C", 13) == 0)
+                    {
+                        int version = 0;
+                        f.read((char*)&version, sizeof(int));
 
-                    if (version == 4)
-                    {
-                        // v4: obstacles + layers (obstacles already loaded from S, skip)
-                        int obsCount = 0;
-                        f.read((char*)&obsCount, sizeof(int));
-                        // skip obstacle bytes (already loaded from region_S)
-                        f.seekg(obsCount * 4 * sizeof(float), std::ios::cur);
-                        readLayers(f, y, x);
-                    }
-                    else if (version == 3)
-                    {
-                        // v3: layers only
-                        readLayers(f, y, x);
-                    }
-                    else if (version == 2)
-                    {
-                        // v2 legacy: obstacles then layers
-                        // skip obstacles (they should be in region_S already)
-                        int obsCount = 0;
-                        f.read((char*)&obsCount, sizeof(int));
-                        f.seekg(obsCount * 4 * sizeof(float), std::ios::cur);
-                        readLayers(f, y, x);
+                        // version 4+: có obstacle table trước layers
+                        if (version >= 4)
+                            readObs(f, result->obstacles, y, x);
+
+                        readLayers(f, result->tiles, y, x);
                     }
                 }
             }
-        }
-        else if (!fs::exists(pathS) && !fs::exists(pathC))
-        {
-            // Legacy: try old region_C with version 2 (has both obstacles+tiles)
-            // (already handled above — if neither S nor C exists, region is empty)
-        }
-    }
 
-    snprintf(_statusMsg, sizeof(_statusMsg), "Loaded: %s  (%dx%d, unit=%d, type=%s)",
-             fs::path(folderPath).filename().string().c_str(),
-             _mapWidth, _mapHeight, _unitSize,
-             _exportType == 0 ? "S" : "C");
-    _statusTimer = 4.f;
+            ++done;
+            if (total > 0)
+                _loadProgress.store((float)done / (float)total);
+        }
+
+        result->success = true;
+        printf("BG LOAD DONE: %s (%dx%d regions)\n", folderPath.c_str(), rw, rh);
+
+        // Gửi kết quả về GUI thread
+        {
+            std::lock_guard<std::mutex> lk(_loadResultMutex);
+            _pendingResult = std::move(result);
+        }
+        // _isLoading sẽ được clear bởi PollLoadResult() trên GUI thread
+    });
+
+    snprintf(_statusMsg, sizeof(_statusMsg), "Loading map: %s ...", fs::path(folderPath).filename().string().c_str());
+    _statusTimer = 999.f; // sẽ bị reset khi load xong
     return true;
 }
 
@@ -601,6 +896,9 @@ bool MapEditor::SaveMap()
     return SaveMapTo(_currentMapPath);
 }
 
+
+#define EXPORT_TYPE_S 0
+#define EXPORT_TYPE_C 1
 bool MapEditor::SaveMapTo(const std::string& folderPath)
 {
     fs::create_directories(folderPath);
@@ -638,9 +936,9 @@ bool MapEditor::SaveMapTo(const std::string& folderPath)
                            ? _regionObstacles[y][x] : std::vector<ObstacleEdit>{};
         int obsCount = (int)obsVec.size();
 
-        // ── Always write region_S (obstacle data) ────────────
-        if(_exportType == 0)
-        {
+        // ── Always write region_S (obstacle data cho server) ─
+        // Dù export type là S hay C, server đều cần region_S để check collision.
+        if(_exportType == EXPORT_TYPE_S){
             char pathS[512];
             snprintf(pathS, sizeof(pathS), "%s/region_S_%d.dat", dir, y);
             std::ofstream f(pathS, std::ios::binary);
@@ -661,7 +959,7 @@ bool MapEditor::SaveMapTo(const std::string& folderPath)
         }
 
         // ── Write region_C only when type=C ──────────────────
-        if (_exportType == 1)
+        if (_exportType == EXPORT_TYPE_C)
         {
             char pathC[512];
             snprintf(pathC, sizeof(pathC), "%s/region_C_%d.dat", dir, y);
@@ -766,6 +1064,10 @@ void MapEditor::RenderEditor()
 {
     float dt = ImGui::GetIO().DeltaTime;
     if (_statusTimer > 0.f) _statusTimer -= dt;
+
+    // ── Poll background map load result ─────────────────────
+    PollLoadResult();
+
     TickPreviews(dt);
 
     ImGui::SetNextWindowSize(ImVec2(1400, 760), ImGuiCond_Once);
@@ -1108,7 +1410,7 @@ void MapEditor::RenderCanvasPanel()
         _viewOffsetY += io.MouseDelta.y;
     }
 
-    // ── Zoom with mouse wheel ─────────────────────────────────
+    // Zoom with mouse wheel
     if (hovered && io.MouseWheel != 0.f)
     {
         float oldScale = _viewScale;
@@ -1134,22 +1436,69 @@ void MapEditor::RenderCanvasPanel()
     dl->PushClipRect(canvasP0, canvasP1, true);
 
     // ── Draw tiles ───────────────────────────────────────────
+    // PollPendingUploads: nhận kết quả từ worker threads → upload GL texture
+    PollPendingUploads();
+
     if (_showTiles)
     {
+        // Viewport bounds trong world-space (tính 1 lần, dùng cho cả cull + queue)
+        float vpX0 = -_viewOffsetX / _viewScale;
+        float vpY0 = -_viewOffsetY / _viewScale;
+        float vpX1 = vpX0 + avail.x / _viewScale;
+        float vpY1 = vpY0 + avail.y / _viewScale;
+        // Margin nhỏ để tránh pop-in khi scroll nhanh
+        float margin = 64.f;
+        float vpX0m = vpX0 - margin, vpY0m = vpY0 - margin;
+        float vpX1m = vpX1 + margin, vpY1m = vpY1 + margin;
+
         int rw = _unitSize > 0 ? _mapWidth  / _unitSize : 0;
         int rh = _unitSize > 0 ? _mapHeight / _unitSize : 0;
+
+        // Throttle: chỉ queue tối đa N tiles mới mỗi frame để tránh flood queue
+        // Worker threads sẽ xử lý dần dần, mỗi frame upload thêm
+        int queueBudget = 16; // tiles/frame tối đa được queue
+
         for (int ry = 0; ry < rh; ry++)
         for (int rx = 0; rx < rw; rx++)
         {
             if (ry >= (int)_regionTiles.size() || rx >= (int)_regionTiles[ry].size()) continue;
-            const auto& layers = _regionTiles[ry][rx];
-            for (const auto& layer : layers)
-            for (auto& tile : const_cast<std::vector<PlacedTile>&>(layer))
+
+            // Region AABB culling (nhanh hơn tile-by-tile khi region trống)
+            float regX0 = (float)(rx * _unitSize);
+            float regY0 = (float)(ry * _unitSize);
+            float regX1 = regX0 + _unitSize;
+            float regY1 = regY0 + _unitSize;
+            if (regX1 < vpX0m || regX0 > vpX1m || regY1 < vpY0m || regY0 > vpY1m)
+                continue; // toàn bộ region nằm ngoài viewport
+
+            for (std::vector<PlacedTile>& layer : _regionTiles[ry][rx])
+            for (PlacedTile& tile : layer)
             {
-                if (!tile.loaded) LoadTilePreview(tile);
+                // World-space AABB của tile
+                float tx0 = tile.x - tile.pivotX;
+                float ty0 = tile.y - tile.pivotY;
+                float tw  = tile.frameW > 0 ? (float)tile.frameW : 64.f;
+                float th  = tile.frameH > 0 ? (float)tile.frameH : 64.f;
+                float tx1 = tx0 + tw;
+                float ty1 = ty0 + th;
+
+                // Cull: tile nằm ngoài viewport+margin → skip render (KHÔNG free texture)
+                if (tx1 < vpX0m || tx0 > vpX1m || ty1 < vpY0m || ty0 > vpY1m)
+                    continue;
+
+                // Queue load nếu chưa có texture, nhưng throttle
+                if (tile.loadState == 0 && queueBudget > 0)
+                {
+                    QueueTileLoad(tile);
+                    --queueBudget;
+                }
+
+                // Chỉ render nếu có texture hợp lệ VÀ tile nằm trong viewport thực
                 if (!tile.previewTexID) continue;
-                ImVec2 sp = W2S(tile.x - tile.pivotX, tile.y - tile.pivotY);
-                ImVec2 ep = { sp.x + tile.frameW * _viewScale, sp.y + tile.frameH * _viewScale };
+                if (tx1 < vpX0 || tx0 > vpX1 || ty1 < vpY0 || ty0 > vpY1) continue;
+
+                ImVec2 sp = W2S(tx0, ty0);
+                ImVec2 ep = { sp.x + tw * _viewScale, sp.y + th * _viewScale };
                 dl->AddImage((ImTextureID)(uintptr_t)tile.previewTexID, sp, ep);
             }
         }
@@ -1509,6 +1858,22 @@ void MapEditor::RenderLayerPanel()
 void MapEditor::RenderStatusBar()
 {
     ImGui::Separator();
+
+    // ── Progress bar khi đang load map ────────────────────────
+    if (_isLoading.load())
+    {
+        float prog = _loadProgress.load();
+        char overlay[64];
+        snprintf(overlay, sizeof(overlay), "Loading... %.0f%%", prog * 100.f);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.2f, 0.7f, 1.0f, 1.f));
+        ImGui::ProgressBar(prog, ImVec2(-1.f, 14.f), overlay);
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0, 8);
+        ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.f, 1.f), "%s",
+                           fs::path(_pendingLoadPath).filename().string().c_str());
+        return;
+    }
+
     if (_statusTimer > 0.f)
         ImGui::TextColored(ImVec4(.4f,1.f,.4f,1.f), "%s", _statusMsg);
     else
@@ -1587,18 +1952,29 @@ void MapEditor::RenderDialogs()
     }
     if (ImGui::BeginPopupModal("Load Map##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::InputText("Map Folder##lm", _dlgBuf, sizeof(_dlgBuf));
+        ImGui::TextDisabled("Chọn thư mục map (chứa region_C):");
+        ImGui::Spacing();
+
+        ImGui::SetNextItemWidth(360);
+        ImGui::InputText("##lmcp", _dlgBufC, sizeof(_dlgBufC));
         ImGui::SameLine();
-        if (ImGui::Button("Browse##lmb"))
+        if (ImGui::Button("...##lmcbr"))
         {
             std::string f = BrowseForFolder("Select map folder");
-            if (!f.empty()) strncpy(_dlgBuf, f.c_str(), sizeof(_dlgBuf)-1);
+            if (!f.empty()) strncpy(_dlgBufC, f.c_str(), sizeof(_dlgBufC)-1);
         }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+
+        bool canLoad = (_dlgBufC[0] != '\0');
+        if (!canLoad) ImGui::BeginDisabled();
         if (ImGui::Button("Load", ImVec2(100,0)))
         {
-            if (_dlgBuf[0]) LoadMap(_dlgBuf);
+            LoadMap(_dlgBufC);
             ImGui::CloseCurrentPopup();
         }
+        if (!canLoad) ImGui::EndDisabled();
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(100,0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -1626,7 +2002,7 @@ void MapEditor::RenderDialogs()
         ImGui::RadioButton("S (server only)##sa", &_exportType, 0);
         ImGui::SameLine();
         ImGui::RadioButton("C (client+server)##sa", &_exportType, 1);
-        ImGui::TextDisabled("  S = region_S only  |  C = region_S + region_C");
+        ImGui::TextDisabled("  S = region_S only  |  C = region_C only");
         if (ImGui::Button("Save", ImVec2(100,0)))
         {
             if (_dlgBuf[0]) SaveMapTo(_dlgBuf);
@@ -1661,4 +2037,53 @@ void MapEditor::RenderDialogs()
         if (ImGui::Button("Cancel", ImVec2(100,0))) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// LoadFromConfig / SaveToConfig  — AppConfig integration
+// ═══════════════════════════════════════════════════════════
+void MapEditor::LoadFromConfig()
+{
+    AppConfig& cfg = AppConfig::Get();
+
+    // ── VFS root ─────────────────────────────────────────────
+    if (!cfg.mapVfsRoot.empty())
+    {
+        _vfsRoot = cfg.mapVfsRoot;
+        strncpy(_vfsRootBuf, _vfsRoot.c_str(), sizeof(_vfsRootBuf) - 1);
+    }
+
+    // ── Export type ───────────────────────────────────────────
+    _exportType = cfg.mapExportType;
+
+    // ── Tileset folders ───────────────────────────────────────
+    for (const auto& tf : cfg.mapTilesetFolders)
+    {
+        if (!tf.empty() && fs::is_directory(tf))
+            AddTilesetFolder(tf);
+    }
+
+    // ── Auto-load last map ────────────────────────────────────
+    if (!cfg.mapLastPath.empty() && fs::is_directory(cfg.mapLastPath))
+        LoadMap(cfg.mapLastPath);
+}
+
+void MapEditor::SaveToConfig()
+{
+    AppConfig& cfg = AppConfig::Get();
+
+    // ── Current map path ──────────────────────────────────────
+    if (!_currentMapPath.empty())
+        cfg.mapLastPath = _currentMapPath;
+
+    // ── VFS root ──────────────────────────────────────────────
+    cfg.mapVfsRoot   = _vfsRoot;
+
+    // ── Export type ───────────────────────────────────────────
+    cfg.mapExportType = _exportType;
+
+    // ── Tileset folders ───────────────────────────────────────
+    cfg.mapTilesetFolders.clear();
+    for (const auto& folder : _tilesetFolders)
+        cfg.mapTilesetFolders.push_back(folder.folderPath);
 }

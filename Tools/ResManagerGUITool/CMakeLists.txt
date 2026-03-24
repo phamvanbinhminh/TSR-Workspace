@@ -1,7 +1,9 @@
 project(SResManager) 
 find_package(imgui CONFIG REQUIRED) 
 add_executable(SResManager
- src/Core/main.cpp src/MapEdit/MapEditor.cpp 
+ src/Core/main.cpp
+ src/Core/AppConfig.cpp
+ src/MapEdit/MapEditor.cpp 
  src/PakEdit/PakEditor.cpp 
  src/SprEdit/SprEditor.cpp
  ${CMAKE_SOURCE_DIR}/Tools/external/imgui/backends/imgui_impl_glfw.cpp

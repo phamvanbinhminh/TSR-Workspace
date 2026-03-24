@@ -36,7 +36,8 @@ void GameServer::LoadMap(const std::string& folder)
     if (folder.empty()) return;
 
     _map = std::make_unique<Map>();
-    if (_map->Load(folder))
+    // LoadServer() đọc header + toàn bộ RegionS (obstacle data)
+    if (_map->LoadServer(folder))
         std::cout << "[GameServer] Map loaded: " << folder
                   << "  " << _map->GetWidth() << "x" << _map->GetHeight()
                   << " unit=" << _map->GetUnitSize() << "\n";
@@ -248,14 +249,17 @@ void GameServer::ClientThread(uintptr_t clientSock)
                           bodySize, MSG_WAITALL);
             if (rm != bodySize) break;
 
-            // Kiểm tra collision với map (AABB 16x24, gốc ở giữa đáy nhân vật)
+            // Kiểm tra collision với map dùng hitbox từ client (SprFrameMeta)
+            // Nếu hitbox không hợp lệ (w/h <= 0), fallback sang 16x24
             bool blocked = false;
             if (_map)
             {
-                constexpr float HW = 8.f;   // half-width
-                constexpr float HH = 12.f;  // half-height
+                float hw = (movePkt.hitboxW > 0) ? (float)movePkt.hitboxW : 16.f;
+                float hh = (movePkt.hitboxH > 0) ? (float)movePkt.hitboxH : 24.f;
+                float ox = (float)movePkt.hitboxX;  // offset X tương đối x
+                float oy = (float)movePkt.hitboxY;  // offset Y tương đối y
                 blocked = _map->CheckCollision(
-                    movePkt.x - HW, movePkt.y - HH, HW * 2.f, HH * 2.f);
+                    movePkt.x + ox, movePkt.y + oy, hw, hh);
             }
 
             if (!blocked)

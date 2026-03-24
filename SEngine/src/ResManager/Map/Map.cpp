@@ -43,7 +43,7 @@ bool Map::LoadMapFile(const std::string& file)
     return (_width > 0 && _height > 0 && _unitSize > 0);
 }
 
-bool Map::Load(const std::string& folder)
+bool Map::LoadMapFromFolder(const std::string& folder)
 {
     _folder = folder;
 
@@ -59,12 +59,30 @@ bool Map::Load(const std::string& folder)
         std::cerr << "[Map] Không tìm thấy hoặc lỗi đọc: " << mapFile << "\n";
         return false;
     }
-
     _regionW = (_width  + _unitSize - 1) / _unitSize;
     _regionH = (_height + _unitSize - 1) / _unitSize;
 
-    // Luôn load RegionS (obstacle/collision) nếu file tồn tại
-    // Client không cần nhưng không hại gì khi load (sẽ bỏ qua nếu file không có)
+    return true;
+}
+
+bool Map::Load(const std::string& folder)
+{
+    if(!LoadMapFromFolder(folder))
+        return false;
+
+    // Client chỉ cần đọc .map header — RegionC được lazy-load qua LoadRegionAround()
+    // Server gọi LoadServer() sau Load() nếu cần RegionS (obstacle data)
+    printf("[Map] Map header loaded: %dx%d unit=%d regions=%dx%d\n",
+           _width, _height, _unitSize, _regionW, _regionH);
+    return true;
+}
+
+bool Map::LoadServer(const std::string& folder)
+{
+    if (!LoadMapFromFolder(folder))
+        return false;
+
+    // Server load toàn bộ RegionS để có obstacle data đầy đủ
     _serverRegions.resize(_regionW, std::vector<RegionS>(_regionH));
     int loadedS = 0;
     for (int rx = 0; rx < _regionW; rx++)
@@ -72,7 +90,6 @@ bool Map::Load(const std::string& folder)
             if (_serverRegions[rx][ry].Load(RegionSPath(rx, ry)))
                 loadedS++;
     printf("[Map] RegionS loaded: %d/%d\n", loadedS, _regionW * _regionH);
-
     return true;
 }
 
@@ -110,6 +127,9 @@ void Map::LoadRegionAround(Renderer& renderer, float wx, float wy, int radius)
             // Cập nhật maxLayers từ region đã load
             if (region.GetLayerCount() > _maxLayers)
                 _maxLayers = region.GetLayerCount();
+
+            // Preload tất cả tiles lên GPU ngay khi region được add vào
+            region.PreloadTiles(renderer);
 
             _clientRegions.emplace(RegionKey(rx, ry), std::move(region));
         }
@@ -168,6 +188,28 @@ void Map::DrawGrid(Renderer& renderer, int size)
     glEnd();
 }
 
+void Map::DrawObstaclesDebug(Renderer& renderer)
+{
+    // Duyệt tất cả clientRegion đã load
+    for (auto& [key, region] : _clientRegions)
+    {
+        int rx = (_regionH > 0) ? key / _regionH : 0;
+        int ry = (_regionH > 0) ? key % _regionH : 0;
+
+        float offsetX = (float)(rx * _unitSize);
+        float offsetY = (float)(ry * _unitSize);
+
+        for (const auto& obs : region.GetObstacles())
+        {
+            // Vẽ //// đỏ bán trong suốt, spacing=8px
+            renderer.DrawHatchRect(
+                obs.x + offsetX, obs.y + offsetY,
+                obs.w, obs.h,
+                1.f, 0.f, 0.f, 0.55f, 8.f);
+        }
+    }
+}
+
 // ================================================================
 //  SERVER methods
 // ================================================================
@@ -218,6 +260,43 @@ bool Map::CheckCollision(float wx, float wy, float w, float h) const
             float offY = (float)(ry * _unitSize);
 
             for (const auto& obs : region.GetObstacles())
+            {
+                float obsWX = obs.x + offX;
+                float obsWY = obs.y + offY;
+
+                if (AabbOverlap(wx, wy, w, h, obsWX, obsWY, obs.w, obs.h))
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool Map::CheckCollisionClient(float wx, float wy, float w, float h) const
+{
+    if (_clientRegions.empty()) return false;
+
+    int rxMin = (int)(wx / _unitSize);
+    int ryMin = (int)(wy / _unitSize);
+    int rxMax = (int)((wx + w) / _unitSize);
+    int ryMax = (int)((wy + h) / _unitSize);
+
+    rxMin = std::max(rxMin, 0);
+    ryMin = std::max(ryMin, 0);
+    rxMax = std::min(rxMax, _regionW - 1);
+    ryMax = std::min(ryMax, _regionH - 1);
+
+    for (int rx = rxMin; rx <= rxMax; rx++)
+    {
+        for (int ry = ryMin; ry <= ryMax; ry++)
+        {
+            auto it = _clientRegions.find(RegionKey(rx, ry));
+            if (it == _clientRegions.end()) continue;
+
+            float offX = (float)(rx * _unitSize);
+            float offY = (float)(ry * _unitSize);
+
+            for (const auto& obs : it->second.GetObstacles())
             {
                 float obsWX = obs.x + offX;
                 float obsWY = obs.y + offY;

@@ -151,7 +151,9 @@ void GameClient::Disconnect()
 //  SendMove
 // ================================================================
 
-void GameClient::SendMove(float x, float y, uint8_t animState)
+void GameClient::SendMove(float x, float y, uint8_t animState,
+                           int16_t hitboxX, int16_t hitboxY,
+                           int16_t hitboxW, int16_t hitboxH)
 {
     if (!_connected) return;
 
@@ -161,6 +163,10 @@ void GameClient::SendMove(float x, float y, uint8_t animState)
     pkt.x         = x;
     pkt.y         = y;
     pkt.animState = animState;
+    pkt.hitboxX   = hitboxX;
+    pkt.hitboxY   = hitboxY;
+    pkt.hitboxW   = hitboxW;
+    pkt.hitboxH   = hitboxH;
     send((SOCKET)_sock, (const char*)&pkt, sizeof(pkt), 0);
 }
 

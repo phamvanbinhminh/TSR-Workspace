@@ -55,6 +55,9 @@ public:
     bool Load(const std::string& file);
     void Unload();
 
+    // Preload toàn bộ tiles lên GPU — gọi 1 lần sau Load(), không gọi trong render loop
+    void PreloadTiles(Renderer& renderer);
+
     // Draw tất cả tile trên layer chỉ định
     // offsetX/Y = world-space offset của region này (regionX * unitSize, regionY * unitSize)
     void DrawLayer(Renderer& renderer, float offsetX, float offsetY, int layerIdx);
