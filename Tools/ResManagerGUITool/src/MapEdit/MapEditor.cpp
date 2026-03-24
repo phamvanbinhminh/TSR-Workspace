@@ -906,7 +906,7 @@ bool MapEditor::SaveMapTo(const std::string& folderPath)
     std::string mapFile = folderPath + "/" + mapName + ".map";
 
     // _exportType: 0 = S, 1 = C
-    const char* typeStr = (_exportType == 0) ? "S" : "C";
+    const char* typeStr = (_exportType == EXPORT_TYPE_S) ? "S" : "C";
 
     {
         std::ofstream f(mapFile);
@@ -1925,9 +1925,9 @@ void MapEditor::RenderDialogs()
 
         ImGui::Text("Export Type:");
         ImGui::SameLine();
-        ImGui::RadioButton("S (server only)##nm", &_exportType, 0);
+        ImGui::RadioButton("S (server only)##nm", &_exportType, EXPORT_TYPE_S);
         ImGui::SameLine();
-        ImGui::RadioButton("C (client+server)##nm", &_exportType, 1);
+        ImGui::RadioButton("C (client+server)##nm", &_exportType, EXPORT_TYPE_C);
         ImGui::TextDisabled("  S = region_S only (obstacles)\n  C = region_S + region_C (obstacles + tiles)");
 
         if (ImGui::Button("Create", ImVec2(100,0)))
@@ -1999,9 +1999,9 @@ void MapEditor::RenderDialogs()
         }
         ImGui::Text("Export Type:");
         ImGui::SameLine();
-        ImGui::RadioButton("S (server only)##sa", &_exportType, 0);
+        ImGui::RadioButton("S (server only)##sa", &_exportType, EXPORT_TYPE_S);
         ImGui::SameLine();
-        ImGui::RadioButton("C (client+server)##sa", &_exportType, 1);
+        ImGui::RadioButton("C (client+server)##sa", &_exportType, EXPORT_TYPE_C);
         ImGui::TextDisabled("  S = region_S only  |  C = region_C only");
         if (ImGui::Button("Save", ImVec2(100,0)))
         {
