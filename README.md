@@ -8,11 +8,10 @@ TSR Workspace là mono-repo chứa toàn bộ hệ thống phát triển game, b
 
 Mục tiêu là cung cấp một pipeline hoàn chỉnh từ tạo asset → build → runtime.
 
----
-
+'''
 ## Project Structure
 
-'''
+
 TSR-Workspace/
 ├── DaiGiangVoTan/ # Game client
 ├── SEngine/ # Core engine (rendering, ECS, resource...)
@@ -20,8 +19,6 @@ TSR-Workspace/
 ├── CMakeLists.txt # Root build config
 └── .gitignore
 '''
-
----
 
 ## Components
 
