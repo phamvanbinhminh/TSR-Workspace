@@ -122,10 +122,7 @@ Tách SEngine thành repo riêng (submodule)
 CI/CD build tự động
 Binary resource format + compression
 Streaming world (load/unload region theo camera)
-License
-
-Private project.
-
+License toy project :V
 Author
 
 Pham Van Binh Minh
