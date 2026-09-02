@@ -98,7 +98,7 @@ region_S: logic, collision
 region_C: render, asset
 Development Notes
 
-###Kiến trúc tách biệt:
+### Kiến trúc tách biệt:
 Engine (SEngine)
 Game (DaiGiangVoTan)
 Tools
