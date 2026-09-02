@@ -79,8 +79,8 @@ make
 
 (Có thể dùng toolchain VS2022 + VSCode để build)
 
-Resource Pipeline
-
+## Resource Pipeline
+```
 Assets (images, data)
 ↓
 Tools (SPR / MAP / PAK)
@@ -88,19 +88,22 @@ Tools (SPR / MAP / PAK)
 .pak files
 ↓
 Game Client (runtime load)
+```
+## Map System
 
-Map System
 Map được chia thành grid region
 Mỗi region có kích thước cố định (UnitSize x UnitSize)
-Server và Client sử dụng dữ liệu riêng:
+### Server và Client sử dụng dữ liệu riêng:
 region_S: logic, collision
 region_C: render, asset
 Development Notes
-Kiến trúc tách biệt:
+
+###Kiến trúc tách biệt:
 Engine (SEngine)
 Game (DaiGiangVoTan)
 Tools
-Dễ mở rộng:
+
+### Dễ mở rộng:
 thêm system mới vào engine
 thêm format resource
 Hỗ trợ phát triển game 2D theo hướng data-driven
@@ -109,7 +112,7 @@ Engine
 ECS hoàn chỉnh
 Resource streaming theo region
 Animation system tối ưu
-Tools
+### Tools
 Drag & drop asset
 Undo / Redo
 Resource browser
@@ -117,12 +120,12 @@ Game
 Gameplay systems
 AI / NPC
 UI
-Future Improvements
+### Future Improvements
 Tách SEngine thành repo riêng (submodule)
 CI/CD build tự động
 Binary resource format + compression
 Streaming world (load/unload region theo camera)
-License toy project :V
-Author
+### License toy project :V
+### Author
 
 Pham Van Binh Minh
